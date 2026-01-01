@@ -1,0 +1,7 @@
+{
+  "name": "iAnnotate Web - Professional PDF & Handwriting Tool",
+  "description": "A high-performance iPad-style PDF annotation application built with React. Features include PencilKit-like drawing, PDF background support, and AI-powered handwriting recognition using Gemini.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
