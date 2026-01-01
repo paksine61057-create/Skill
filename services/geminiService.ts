@@ -10,7 +10,7 @@ export const recognizeHandwriting = async (base64Image: string): Promise<string>
       contents: {
         parts: [
           {
-            text: "Extract all handwritten text from this image. Only return the text itself. Support both English and Thai. If no text is found, return an empty string."
+            text: "OCR Task: Extract the text from this handwritten segment. It might be a single character, a syllable, or a short word in Thai or English. Return ONLY the text content. No symbols, no quotes, no extra words. If you see 'ก', just return 'ก'. If it's a mark, return an empty string."
           },
           {
             inlineData: {
@@ -21,13 +21,13 @@ export const recognizeHandwriting = async (base64Image: string): Promise<string>
         ],
       },
       config: {
-        temperature: 0.1,
+        temperature: 0.0, // Set to 0 for deterministic results in Scribble mode
       }
     });
 
-    return response.text || "";
+    return response.text?.trim() || "";
   } catch (error) {
     console.error("OCR Error:", error);
-    return "Error recognizing text";
+    return "";
   }
 };
