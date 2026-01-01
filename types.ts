@@ -21,4 +21,5 @@ export interface TextBox {
   text: string;
   x: number;
   y: number;
+  fontSize: number;
 }

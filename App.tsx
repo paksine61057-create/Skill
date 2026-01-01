@@ -18,7 +18,7 @@ import { ToolType, Stroke, Point, TextBox } from './types';
 import { recognizeHandwriting } from './services/geminiService';
 
 const PAGE_HEIGHT_INCREMENT = 1100;
-const AUTO_CONVERT_DELAY = 1800; // Wait 1.8 seconds after writing before converting
+const AUTO_CONVERT_DELAY = 1500; // ลดเวลาหน่วงเพื่อให้การตอบสนองเร็วขึ้น
 
 const App: React.FC = () => {
   // States
@@ -64,16 +64,22 @@ const App: React.FC = () => {
     setIsProcessing(true);
     const canvas = canvasRef.current;
     
-    // 1. Calculate Bounding Box of handwriting to place text accurately
-    let minX = Infinity, minY = Infinity;
+    // 1. Calculate Bounding Box and estimated Font Size
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     convertStrokes.forEach(s => {
       s.points.forEach(p => {
         if (p.x < minX) minX = p.x;
         if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
       });
     });
 
-    // 2. Create a temporary canvas for OCR (Cleaner background for better AI results)
+    // Estimate font size based on handwriting height
+    // We use a factor (e.g. 0.85) because handwriting often has descenders/ascenders
+    const estimatedFontSize = Math.max(16, (maxY - minY) * 0.85);
+
+    // 2. Create OCR Snapshot
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = canvas.width;
     tempCanvas.height = canvas.height;
@@ -83,7 +89,7 @@ const App: React.FC = () => {
       tCtx.lineJoin = 'round';
       convertStrokes.forEach(stroke => {
         tCtx.beginPath();
-        tCtx.strokeStyle = stroke.color;
+        tCtx.strokeStyle = "#000000"; // Use pure black for better OCR
         tCtx.lineWidth = stroke.width;
         tCtx.moveTo(stroke.points[0].x, stroke.points[0].y);
         stroke.points.forEach(p => tCtx.lineTo(p.x, p.y));
@@ -99,10 +105,12 @@ const App: React.FC = () => {
         id: Math.random().toString(36).substr(2, 9),
         text: text.trim(),
         x: minX,
-        y: minY - 10 
+        y: minY - (estimatedFontSize * 0.1), // Offset slightly to match visual baseline
+        fontSize: estimatedFontSize
       };
 
       setTextBoxes(prev => [...prev, newBox]);
+      // Clear handwriting strokes, keep markers
       setStrokes(prev => prev.filter(s => s.tool === 'highlighter'));
     }
     setIsProcessing(false);
@@ -168,7 +176,7 @@ const App: React.FC = () => {
   };
 
   const handleEraser = (x: number, y: number) => {
-    // 1. Erase Strokes (Pen & Highlighter)
+    // Erase Strokes
     setStrokes(prev => prev.filter(stroke => {
       return !stroke.points.some(p => {
         const dist = Math.sqrt(Math.pow(p.x - x, 2) + Math.pow(p.y - y, 2));
@@ -176,13 +184,12 @@ const App: React.FC = () => {
       });
     }));
 
-    // 2. Erase Text Boxes
-    // We define a hit area around the text box anchor (box.x, box.y)
-    // Since we don't have exact dimensions, we use a generous area that covers typical line lengths
+    // Erase Text Boxes
     setTextBoxes(prev => prev.filter(box => {
-      const hitWidth = 200; // Approximate width of a text snippet
-      const hitHeight = 40;  // Approximate height of a text line
-      const padding = 15;   // Padding for easier erasing
+      // Hit detection based on the box's font size and position
+      const hitWidth = box.text.length * (box.fontSize * 0.5); // Heuristic
+      const hitHeight = box.fontSize;
+      const padding = 10;
 
       const isHit = (
         x >= box.x - padding &&
@@ -264,7 +271,7 @@ const App: React.FC = () => {
               className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold transition-all ${autoConvert ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-600 hover:bg-indigo-100'}`}
             >
               <Sparkles size={16} />
-              <span>Auto-Convert</span>
+              <span>Magic Font</span>
             </button>
           </div>
           <div className="h-8 w-px bg-gray-200 mx-1" />
@@ -281,7 +288,7 @@ const App: React.FC = () => {
             className="bg-gray-900 text-white px-5 py-2 rounded-xl font-semibold hover:bg-black transition-all active:scale-95 flex items-center gap-2 shadow-lg shadow-black/10"
           >
             <Download size={18} />
-            <span>Export PDF</span>
+            <span>Export</span>
           </button>
         </div>
       </header>
@@ -320,20 +327,23 @@ const App: React.FC = () => {
             className="absolute inset-0 z-10 cursor-crosshair touch-none"
           />
 
-          {/* Render Text Boxes with Anuphan font */}
+          {/* Render Text Boxes with Dynamic Font Size and Anuphan font */}
           {textBoxes.map(box => (
             <div 
               key={box.id}
-              className="absolute z-20 group p-0 bg-transparent hover:bg-indigo-50/30 rounded transition-colors thai-font fade-in select-none"
+              className="absolute z-20 group p-0 bg-transparent hover:bg-indigo-50/10 rounded transition-colors thai-font fade-in select-none"
               style={{ left: box.x, top: box.y }}
             >
               <div className="relative">
-                <p className="text-xl text-gray-900 leading-tight font-normal min-w-[20px] max-w-[600px] whitespace-pre-wrap pointer-events-none">
+                <p 
+                  className="text-gray-900 leading-tight font-normal min-w-[10px] max-w-[700px] whitespace-pre-wrap pointer-events-none"
+                  style={{ fontSize: `${box.fontSize}px` }}
+                >
                   {box.text}
                 </p>
                 <button 
                   onClick={() => setTextBoxes(prev => prev.filter(b => b.id !== box.id))}
-                  className="absolute -top-4 -right-4 opacity-0 group-hover:opacity-100 bg-red-500 text-white p-1 rounded-full transition-opacity shadow-lg"
+                  className="absolute -top-3 -right-3 opacity-0 group-hover:opacity-100 bg-red-500 text-white p-0.5 rounded-full transition-opacity shadow-lg"
                 >
                   <X size={10} />
                 </button>
@@ -345,7 +355,7 @@ const App: React.FC = () => {
           {isProcessing && (
             <div className="absolute bottom-10 right-10 z-30 flex items-center gap-3 bg-white/80 backdrop-blur px-4 py-2 rounded-full shadow-xl border border-indigo-100 animate-bounce">
               <Loader2 className="animate-spin text-indigo-600" size={20} />
-              <span className="text-sm font-bold text-indigo-700 thai-font">กำลังเนรมิตข้อความ...</span>
+              <span className="text-sm font-bold text-indigo-700 thai-font">เนรมิตตัวหนังสือสวย...</span>
             </div>
           )}
         </div>
@@ -357,7 +367,7 @@ const App: React.FC = () => {
           <div className="bg-white/10 p-4 rounded-full group-hover:bg-white/20 transition-all group-hover:scale-110">
             <PlusCircle size={32} />
           </div>
-          <span className="font-bold tracking-wide uppercase text-xs">Add More Canvas Space</span>
+          <span className="font-bold tracking-wide uppercase text-xs">Add Space</span>
         </button>
       </main>
 
@@ -365,12 +375,12 @@ const App: React.FC = () => {
       <footer className="h-10 bg-white border-t px-8 flex items-center justify-between text-[11px] text-gray-400 font-bold uppercase tracking-widest z-50">
         <div className="flex gap-8">
           <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-indigo-400 rounded-full"/> Strokes: {strokes.length}</span>
-          <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-amber-400 rounded-full"/> Objects: {textBoxes.length}</span>
+          <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-amber-400 rounded-full"/> Magic Text: {textBoxes.length}</span>
         </div>
         <div className="flex items-center gap-3">
-          <span className={autoConvert ? 'text-indigo-500' : 'text-gray-400'}>Auto-Convert: {autoConvert ? 'ON' : 'OFF'}</span>
+          <span className={autoConvert ? 'text-indigo-500' : 'text-gray-400'}>Magic Font: {autoConvert ? 'ACTIVE' : 'OFF'}</span>
           <div className="h-3 w-px bg-gray-200" />
-          <span>iPad Pro Simulation Mode</span>
+          <span>Handwriting-to-Beautiful-Font</span>
         </div>
       </footer>
     </div>
