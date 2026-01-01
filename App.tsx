@@ -18,7 +18,7 @@ import { ToolType, Stroke, Point, TextBox } from './types';
 import { recognizeHandwriting } from './services/geminiService';
 
 const PAGE_HEIGHT_INCREMENT = 1100;
-const AUTO_CONVERT_DELAY = 1500; // ลดเวลาหน่วงเพื่อให้การตอบสนองเร็วขึ้น
+const AUTO_CONVERT_DELAY = 1200; // ปรับให้ไวขึ้นเพื่อความเป็น "Magic"
 
 const App: React.FC = () => {
   // States
@@ -58,15 +58,20 @@ const App: React.FC = () => {
 
   // Convert Logic
   const performConversion = async () => {
-    const convertStrokes = strokes.filter(s => s.tool !== 'highlighter');
-    if (!canvasRef.current || convertStrokes.length === 0) return;
+    // เลือกเฉพาะลายเส้นที่ไม่ใช่ไฮไลต์
+    const strokesToConvert = strokes.filter(s => s.tool !== 'highlighter');
+    if (!canvasRef.current || strokesToConvert.length === 0) return;
+    
+    // เคลียร์ลายเส้นที่กำลังจะแปลงออกทันที เพื่อป้องกันการกดซ้ำหรือประมวลผลซ้ำ
+    const processingIds = new Set(strokesToConvert.map(s => s.id));
+    setStrokes(prev => prev.filter(s => !processingIds.has(s.id)));
     
     setIsProcessing(true);
     const canvas = canvasRef.current;
     
-    // 1. Calculate Bounding Box and estimated Font Size
+    // 1. คำนวณขอบเขต (Bounding Box) และขนาดฟอนต์จากลายเส้นจริง
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    convertStrokes.forEach(s => {
+    strokesToConvert.forEach(s => {
       s.points.forEach(p => {
         if (p.x < minX) minX = p.x;
         if (p.y < minY) minY = p.y;
@@ -75,11 +80,10 @@ const App: React.FC = () => {
       });
     });
 
-    // Estimate font size based on handwriting height
-    // We use a factor (e.g. 0.85) because handwriting often has descenders/ascenders
-    const estimatedFontSize = Math.max(16, (maxY - minY) * 0.85);
+    // คำนวณขนาดฟอนต์ให้ใกล้เคียงกับความสูงที่เขียนจริง (ใช้ 90% ของความสูงเพื่อความพอดี)
+    const estimatedFontSize = Math.max(16, (maxY - minY) * 0.9);
 
-    // 2. Create OCR Snapshot
+    // 2. สร้างภาพชั่วคราวเพื่อส่งไป OCR
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = canvas.width;
     tempCanvas.height = canvas.height;
@@ -87,9 +91,9 @@ const App: React.FC = () => {
     if (tCtx) {
       tCtx.lineCap = 'round';
       tCtx.lineJoin = 'round';
-      convertStrokes.forEach(stroke => {
+      strokesToConvert.forEach(stroke => {
         tCtx.beginPath();
-        tCtx.strokeStyle = "#000000"; // Use pure black for better OCR
+        tCtx.strokeStyle = "#000000"; 
         tCtx.lineWidth = stroke.width;
         tCtx.moveTo(stroke.points[0].x, stroke.points[0].y);
         stroke.points.forEach(p => tCtx.lineTo(p.x, p.y));
@@ -101,17 +105,19 @@ const App: React.FC = () => {
     const text = await recognizeHandwriting(dataUrl);
     
     if (text && text.trim() && text !== "Error recognizing text") {
+      // สร้าง TextBox ใหม่ที่ตำแหน่งเดิมเป๊ะๆ
       const newBox: TextBox = {
         id: Math.random().toString(36).substr(2, 9),
         text: text.trim(),
         x: minX,
-        y: minY - (estimatedFontSize * 0.1), // Offset slightly to match visual baseline
+        y: minY, 
         fontSize: estimatedFontSize
       };
 
       setTextBoxes(prev => [...prev, newBox]);
-      // Clear handwriting strokes, keep markers
-      setStrokes(prev => prev.filter(s => s.tool === 'highlighter'));
+    } else {
+      // ถ้าแปลงไม่ได้ ให้เอากลับคืนมา (เผื่อกรณีระบบผิดพลาด)
+      // แต่ในแอปจริงๆ การหายไปเลยอาจจะดูคลีนกว่าหากเป็นขยะ
     }
     setIsProcessing(false);
   };
@@ -168,6 +174,7 @@ const App: React.FC = () => {
     isDrawing.current = false;
     currentStroke.current = null;
     
+    // ตั้งเวลาแปลงอัตโนมัติเมื่อหยุดเขียน
     if (autoConvert && strokes.some(s => s.tool !== 'highlighter')) {
       autoConvertTimer.current = window.setTimeout(() => {
         performConversion();
@@ -176,7 +183,6 @@ const App: React.FC = () => {
   };
 
   const handleEraser = (x: number, y: number) => {
-    // Erase Strokes
     setStrokes(prev => prev.filter(stroke => {
       return !stroke.points.some(p => {
         const dist = Math.sqrt(Math.pow(p.x - x, 2) + Math.pow(p.y - y, 2));
@@ -184,12 +190,11 @@ const App: React.FC = () => {
       });
     }));
 
-    // Erase Text Boxes
     setTextBoxes(prev => prev.filter(box => {
-      // Hit detection based on the box's font size and position
-      const hitWidth = box.text.length * (box.fontSize * 0.5); // Heuristic
+      // ตรวจสอบระยะสัมผัสกับกล่องข้อความ
+      const hitWidth = box.text.length * (box.fontSize * 0.5);
       const hitHeight = box.fontSize;
-      const padding = 10;
+      const padding = 15;
 
       const isHit = (
         x >= box.x - padding &&
@@ -233,59 +238,36 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#F2F2F7]">
-      {/* Top Toolbar */}
-      <header className="h-16 bg-white/90 backdrop-blur-xl border-b flex items-center justify-between px-6 z-50 flex-shrink-0">
+      {/* Tool Bar */}
+      <header className="h-16 bg-white/95 backdrop-blur-xl border-b flex items-center justify-between px-6 z-50 flex-shrink-0 shadow-sm">
         <div className="flex items-center gap-4">
-          <label className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-semibold transition-all active:scale-95 shadow-lg shadow-blue-500/20">
+          <label className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-bold transition-all active:scale-95 shadow-lg shadow-blue-500/20">
             <FileUp size={18} />
-            <span>Open File</span>
+            <span>Open</span>
             <input type="file" accept="image/*,application/pdf" className="hidden" onChange={handleFileUpload} />
           </label>
           <div className="h-8 w-px bg-gray-200" />
           <div className="flex bg-gray-100/80 p-1 rounded-2xl border border-gray-200">
-            <ToolbarButton 
-              active={currentTool === 'pen'} 
-              onClick={() => setCurrentTool('pen')} 
-              icon={<Pencil size={20} />} 
-              label="Pen"
-            />
-            <ToolbarButton 
-              active={currentTool === 'highlighter'} 
-              onClick={() => setCurrentTool('highlighter')} 
-              icon={<Highlighter size={20} />} 
-              label="Marker"
-            />
-            <ToolbarButton 
-              active={currentTool === 'eraser'} 
-              onClick={() => setCurrentTool('eraser')} 
-              icon={<Eraser size={20} />} 
-              label="Eraser"
-            />
+            <ToolbarButton active={currentTool === 'pen'} onClick={() => setCurrentTool('pen')} icon={<Pencil size={20} />} />
+            <ToolbarButton active={currentTool === 'highlighter'} onClick={() => setCurrentTool('highlighter')} icon={<Highlighter size={20} />} />
+            <ToolbarButton active={currentTool === 'eraser'} onClick={() => setCurrentTool('eraser')} icon={<Eraser size={20} />} />
           </div>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 bg-indigo-50/50 p-1 rounded-2xl border border-indigo-100">
-             <button 
-              onClick={() => setAutoConvert(!autoConvert)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold transition-all ${autoConvert ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-600 hover:bg-indigo-100'}`}
-            >
-              <Sparkles size={16} />
-              <span>Magic Font</span>
-            </button>
-          </div>
+          <button 
+            onClick={() => setAutoConvert(!autoConvert)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all border ${autoConvert ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' : 'bg-white border-gray-200 text-gray-500'}`}
+          >
+            <Sparkles size={16} className={autoConvert ? 'animate-pulse' : ''} />
+            <span>Magic Font</span>
+          </button>
+          
           <div className="h-8 w-px bg-gray-200 mx-1" />
           <ToolbarButton onClick={undo} icon={<Undo2 size={20} />} disabled={strokes.length === 0} />
+          
           <button 
-            onClick={performConversion}
-            disabled={isProcessing || strokes.filter(s => s.tool !== 'highlighter').length === 0}
-            className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-50 transition-all active:scale-95 disabled:opacity-50"
-          >
-            {isProcessing ? <Loader2 className="animate-spin text-indigo-600" size={18} /> : <Type className="text-indigo-600" size={18} />}
-            <span>Convert</span>
-          </button>
-          <button 
-            className="bg-gray-900 text-white px-5 py-2 rounded-xl font-semibold hover:bg-black transition-all active:scale-95 flex items-center gap-2 shadow-lg shadow-black/10"
+            className="bg-gray-900 text-white px-6 py-2 rounded-xl font-bold hover:bg-black transition-all active:scale-95 flex items-center gap-2 shadow-lg shadow-black/10"
           >
             <Download size={18} />
             <span>Export</span>
@@ -293,29 +275,28 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main 
-        ref={mainScrollRef}
-        className="flex-1 relative overflow-y-auto overflow-x-hidden flex flex-col items-center p-12 bg-[#D1D1D6]"
-      >
+      {/* Main Canvas Area */}
+      <main ref={mainScrollRef} className="flex-1 relative overflow-y-auto overflow-x-hidden flex flex-col items-center p-8 bg-[#D1D1D6] scroll-smooth">
         <div 
-          className="relative bg-white shadow-[0_20px_50px_rgba(0,0,0,0.15)] transition-all duration-500 mb-10 rounded-sm overflow-hidden"
+          className="relative bg-white shadow-[0_25px_60px_rgba(0,0,0,0.2)] transition-all duration-300 mb-10 rounded-sm overflow-hidden"
           style={{ width: '850px', minHeight: `${canvasHeight}px` }}
         >
-          {/* Document Background */}
-          {pdfUrl ? (
+          {/* PDF Background Layer */}
+          {pdfUrl && (
             <div className="absolute inset-0 z-0">
               <embed src={pdfUrl} type={pdfUrl.includes('image') ? 'image/png' : 'application/pdf'} className="w-full h-[1100px]" />
-              <div className="w-full h-full bg-white" />
-            </div>
-          ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-300 bg-white">
-              <Sparkles size={80} className="mb-6 opacity-10 animate-pulse" />
-              <p className="text-2xl font-semibold opacity-30">Drop a file to begin writing</p>
+              <div className="w-full h-full bg-white opacity-0" />
             </div>
           )}
 
-          {/* Annotation Canvas */}
+          {!pdfUrl && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-200 bg-white">
+              <Sparkles size={80} className="mb-4 opacity-5" />
+              <p className="text-xl font-bold opacity-20 select-none">Start Writing or Open a File</p>
+            </div>
+          )}
+
+          {/* Drawing Layer */}
           <canvas
             ref={canvasRef}
             width={850}
@@ -327,22 +308,23 @@ const App: React.FC = () => {
             className="absolute inset-0 z-10 cursor-crosshair touch-none"
           />
 
-          {/* Render Text Boxes with Dynamic Font Size and Anuphan font */}
+          {/* Text Objects Layer (Magic Font) */}
           {textBoxes.map(box => (
             <div 
               key={box.id}
-              className="absolute z-20 group p-0 bg-transparent hover:bg-indigo-50/10 rounded transition-colors thai-font fade-in select-none"
-              style={{ left: box.x, top: box.y }}
+              className="absolute z-20 group p-0 bg-transparent rounded select-none thai-font fade-in"
+              style={{ left: box.x, top: box.y, lineHeight: 1 }}
             >
               <div className="relative">
                 <p 
-                  className="text-gray-900 leading-tight font-normal min-w-[10px] max-w-[700px] whitespace-pre-wrap pointer-events-none"
+                  className="text-gray-900 leading-[1.05] font-normal min-w-[2px] max-w-[800px] whitespace-pre-wrap pointer-events-none"
                   style={{ fontSize: `${box.fontSize}px` }}
                 >
                   {box.text}
                 </p>
+                {/* Delete button (only visible on hover for desktop, or near interaction) */}
                 <button 
-                  onClick={() => setTextBoxes(prev => prev.filter(b => b.id !== box.id))}
+                  onClick={(e) => { e.stopPropagation(); setTextBoxes(prev => prev.filter(b => b.id !== box.id)); }}
                   className="absolute -top-3 -right-3 opacity-0 group-hover:opacity-100 bg-red-500 text-white p-0.5 rounded-full transition-opacity shadow-lg"
                 >
                   <X size={10} />
@@ -351,36 +333,38 @@ const App: React.FC = () => {
             </div>
           ))}
 
-          {/* Processing Indicator Overlay */}
+          {/* Loading Indicator */}
           {isProcessing && (
-            <div className="absolute bottom-10 right-10 z-30 flex items-center gap-3 bg-white/80 backdrop-blur px-4 py-2 rounded-full shadow-xl border border-indigo-100 animate-bounce">
+            <div className="fixed bottom-12 right-1/2 translate-x-1/2 z-50 flex items-center gap-3 bg-white/90 backdrop-blur px-6 py-3 rounded-2xl shadow-2xl border border-indigo-100 animate-in fade-in slide-in-from-bottom-4 duration-300">
               <Loader2 className="animate-spin text-indigo-600" size={20} />
-              <span className="text-sm font-bold text-indigo-700 thai-font">เนรมิตตัวหนังสือสวย...</span>
+              <span className="text-sm font-bold text-indigo-700 thai-font tracking-tight">กำลังเนรมิตลายมือให้สวยงาม...</span>
             </div>
           )}
         </div>
 
         <button 
           onClick={addMoreSpace}
-          className="flex flex-col items-center gap-3 text-white/50 hover:text-white transition-all mb-20 group"
+          className="flex flex-col items-center gap-3 text-white/40 hover:text-white transition-all mb-24 group"
         >
-          <div className="bg-white/10 p-4 rounded-full group-hover:bg-white/20 transition-all group-hover:scale-110">
+          <div className="bg-white/5 p-4 rounded-full group-hover:bg-white/10 transition-all">
             <PlusCircle size={32} />
           </div>
-          <span className="font-bold tracking-wide uppercase text-xs">Add Space</span>
+          <span className="font-bold tracking-widest uppercase text-[10px]">Extend Page</span>
         </button>
       </main>
 
-      {/* Footer */}
-      <footer className="h-10 bg-white border-t px-8 flex items-center justify-between text-[11px] text-gray-400 font-bold uppercase tracking-widest z-50">
-        <div className="flex gap-8">
-          <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-indigo-400 rounded-full"/> Strokes: {strokes.length}</span>
-          <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-amber-400 rounded-full"/> Magic Text: {textBoxes.length}</span>
+      {/* Footer Info */}
+      <footer className="h-10 bg-white border-t px-8 flex items-center justify-between text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em] z-50">
+        <div className="flex gap-10">
+          <span>Strokes: {strokes.length}</span>
+          <span>Magic Text: {textBoxes.length}</span>
         </div>
-        <div className="flex items-center gap-3">
-          <span className={autoConvert ? 'text-indigo-500' : 'text-gray-400'}>Magic Font: {autoConvert ? 'ACTIVE' : 'OFF'}</span>
+        <div className="flex items-center gap-4">
+          <span className={autoConvert ? 'text-indigo-500' : 'text-gray-300'}>
+            {autoConvert ? 'Magic Mode Active' : 'Manual Mode'}
+          </span>
           <div className="h-3 w-px bg-gray-200" />
-          <span>Handwriting-to-Beautiful-Font</span>
+          <span className="text-gray-500">Professional Annotation Engine</span>
         </div>
       </footer>
     </div>
@@ -391,22 +375,20 @@ interface ToolbarButtonProps {
   active?: boolean;
   onClick: () => void;
   icon: React.ReactNode;
-  label?: string;
   disabled?: boolean;
 }
 
-const ToolbarButton: React.FC<ToolbarButtonProps> = ({ active, onClick, icon, label, disabled }) => (
+const ToolbarButton: React.FC<ToolbarButtonProps> = ({ active, onClick, icon, disabled }) => (
   <button
     onClick={onClick}
     disabled={disabled}
     className={`
-      flex items-center gap-2 px-4 py-2 rounded-xl transition-all
-      ${active ? 'bg-white shadow-md text-blue-600 scale-105' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'}
-      ${disabled ? 'opacity-20 cursor-not-allowed' : 'cursor-pointer'}
+      p-2.5 rounded-xl transition-all
+      ${active ? 'bg-white shadow-sm text-blue-600 scale-110' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}
+      ${disabled ? 'opacity-20 cursor-not-allowed' : 'cursor-pointer active:scale-95'}
     `}
   >
     {icon}
-    {label && <span className="text-sm font-bold uppercase tracking-tight">{label}</span>}
   </button>
 );
 
