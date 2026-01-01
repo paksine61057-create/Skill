@@ -58,12 +58,22 @@ const App: React.FC = () => {
 
   // Convert Logic
   const performConversion = async () => {
-    if (!canvasRef.current || strokes.filter(s => s.tool !== 'highlighter').length === 0) return;
+    const convertStrokes = strokes.filter(s => s.tool !== 'highlighter');
+    if (!canvasRef.current || convertStrokes.length === 0) return;
     
     setIsProcessing(true);
     const canvas = canvasRef.current;
     
-    // Create a temporary canvas with ONLY strokes (no background) for better OCR
+    // 1. Calculate Bounding Box of handwriting to place text accurately
+    let minX = Infinity, minY = Infinity;
+    convertStrokes.forEach(s => {
+      s.points.forEach(p => {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+      });
+    });
+
+    // 2. Create a temporary canvas for OCR (Cleaner background for better AI results)
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = canvas.width;
     tempCanvas.height = canvas.height;
@@ -71,7 +81,7 @@ const App: React.FC = () => {
     if (tCtx) {
       tCtx.lineCap = 'round';
       tCtx.lineJoin = 'round';
-      strokes.filter(s => s.tool !== 'highlighter').forEach(stroke => {
+      convertStrokes.forEach(stroke => {
         tCtx.beginPath();
         tCtx.strokeStyle = stroke.color;
         tCtx.lineWidth = stroke.width;
@@ -85,20 +95,17 @@ const App: React.FC = () => {
     const text = await recognizeHandwriting(dataUrl);
     
     if (text && text.trim() && text !== "Error recognizing text") {
-      // Logic to find roughly where the last strokes were
-      const lastStroke = strokes[strokes.length - 1];
-      const posX = lastStroke?.points[0].x || 100;
-      const posY = lastStroke?.points[0].y || 100;
-
+      // Place the new textbox at the exact top-left of where the handwriting was
+      // Adjust slightly (e.g., -5px) to account for font-rendering vs stroke-edges
       const newBox: TextBox = {
         id: Math.random().toString(36).substr(2, 9),
         text: text.trim(),
-        x: Math.max(50, posX - 50),
-        y: Math.max(50, posY - 20)
+        x: minX,
+        y: minY - 10 // Lift slightly for better baseline feel
       };
 
       setTextBoxes(prev => [...prev, newBox]);
-      // Clear handwriting strokes after conversion
+      // Clear ONLY the handwriting strokes that were converted, keep highlighters
       setStrokes(prev => prev.filter(s => s.tool === 'highlighter'));
     }
     setIsProcessing(false);
@@ -253,7 +260,7 @@ const App: React.FC = () => {
             className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-xl font-semibold hover:bg-gray-50 transition-all active:scale-95 disabled:opacity-50"
           >
             {isProcessing ? <Loader2 className="animate-spin text-indigo-600" size={18} /> : <Type className="text-indigo-600" size={18} />}
-            <span>Manual Convert</span>
+            <span>Convert</span>
           </button>
           <button 
             className="bg-gray-900 text-white px-5 py-2 rounded-xl font-semibold hover:bg-black transition-all active:scale-95 flex items-center gap-2 shadow-lg shadow-black/10"
@@ -302,18 +309,18 @@ const App: React.FC = () => {
           {textBoxes.map(box => (
             <div 
               key={box.id}
-              className="absolute z-20 group p-3 bg-transparent hover:bg-indigo-50/30 rounded-lg transition-colors thai-font fade-in"
+              className="absolute z-20 group p-0 bg-transparent hover:bg-indigo-50/30 rounded transition-colors thai-font fade-in"
               style={{ left: box.x, top: box.y }}
             >
               <div className="relative">
-                <p className="text-xl text-gray-900 leading-[1.6] font-normal min-w-[100px] max-w-[600px] whitespace-pre-wrap">
+                <p className="text-xl text-gray-900 leading-tight font-normal min-w-[20px] max-w-[600px] whitespace-pre-wrap">
                   {box.text}
                 </p>
                 <button 
                   onClick={() => setTextBoxes(prev => prev.filter(b => b.id !== box.id))}
-                  className="absolute -top-6 -right-6 opacity-0 group-hover:opacity-100 bg-red-500 text-white p-1 rounded-full transition-opacity shadow-lg"
+                  className="absolute -top-4 -right-4 opacity-0 group-hover:opacity-100 bg-red-500 text-white p-1 rounded-full transition-opacity shadow-lg"
                 >
-                  <X size={12} />
+                  <X size={10} />
                 </button>
               </div>
             </div>
