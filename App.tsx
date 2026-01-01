@@ -95,17 +95,14 @@ const App: React.FC = () => {
     const text = await recognizeHandwriting(dataUrl);
     
     if (text && text.trim() && text !== "Error recognizing text") {
-      // Place the new textbox at the exact top-left of where the handwriting was
-      // Adjust slightly (e.g., -5px) to account for font-rendering vs stroke-edges
       const newBox: TextBox = {
         id: Math.random().toString(36).substr(2, 9),
         text: text.trim(),
         x: minX,
-        y: minY - 10 // Lift slightly for better baseline feel
+        y: minY - 10 
       };
 
       setTextBoxes(prev => [...prev, newBox]);
-      // Clear ONLY the handwriting strokes that were converted, keep highlighters
       setStrokes(prev => prev.filter(s => s.tool === 'highlighter'));
     }
     setIsProcessing(false);
@@ -163,7 +160,6 @@ const App: React.FC = () => {
     isDrawing.current = false;
     currentStroke.current = null;
     
-    // Start auto-convert timer if enabled and we have drawing strokes
     if (autoConvert && strokes.some(s => s.tool !== 'highlighter')) {
       autoConvertTimer.current = window.setTimeout(() => {
         performConversion();
@@ -172,11 +168,30 @@ const App: React.FC = () => {
   };
 
   const handleEraser = (x: number, y: number) => {
+    // 1. Erase Strokes (Pen & Highlighter)
     setStrokes(prev => prev.filter(stroke => {
       return !stroke.points.some(p => {
         const dist = Math.sqrt(Math.pow(p.x - x, 2) + Math.pow(p.y - y, 2));
-        return dist < (stroke.width + 10);
+        return dist < (stroke.width + 15);
       });
+    }));
+
+    // 2. Erase Text Boxes
+    // We define a hit area around the text box anchor (box.x, box.y)
+    // Since we don't have exact dimensions, we use a generous area that covers typical line lengths
+    setTextBoxes(prev => prev.filter(box => {
+      const hitWidth = 200; // Approximate width of a text snippet
+      const hitHeight = 40;  // Approximate height of a text line
+      const padding = 15;   // Padding for easier erasing
+
+      const isHit = (
+        x >= box.x - padding &&
+        x <= box.x + hitWidth + padding &&
+        y >= box.y - padding &&
+        y <= box.y + hitHeight + padding
+      );
+
+      return !isHit;
     }));
   };
 
@@ -309,11 +324,11 @@ const App: React.FC = () => {
           {textBoxes.map(box => (
             <div 
               key={box.id}
-              className="absolute z-20 group p-0 bg-transparent hover:bg-indigo-50/30 rounded transition-colors thai-font fade-in"
+              className="absolute z-20 group p-0 bg-transparent hover:bg-indigo-50/30 rounded transition-colors thai-font fade-in select-none"
               style={{ left: box.x, top: box.y }}
             >
               <div className="relative">
-                <p className="text-xl text-gray-900 leading-tight font-normal min-w-[20px] max-w-[600px] whitespace-pre-wrap">
+                <p className="text-xl text-gray-900 leading-tight font-normal min-w-[20px] max-w-[600px] whitespace-pre-wrap pointer-events-none">
                   {box.text}
                 </p>
                 <button 
